@@ -1,0 +1,407 @@
+// DormMate — Database schema
+// Entities follow Technical Design v1.0 §8 "Entitetet Kryesore te Sistemit" and §9 "Data Dictionary".
+// Code is English per Development Architecture v1.0 §5.3; user-facing labels are Albanian and live in src/lib/constants.ts.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+/// Technical Design §12 — RBAC has exactly two roles.
+enum Role {
+  STUDENT
+  ADMIN
+}
+
+/// BR-06 — a request status may ONLY be one of these three.
+/// Albanian labels: PENDING = "Ne Pritje", IN_PROGRESS = "Ne Proces", RESOLVED = "E Zgjidhur".
+enum RequestStatus {
+  PENDING
+  IN_PROGRESS
+  RESOLVED
+}
+
+enum Priority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+/// Technical Design §9.3 — the location types that can be reported on.
+enum LocationType {
+  ROOM
+  ENTRANCE
+  HALLWAY
+  BATHROOM
+  SHOWER
+}
+
+/// Technical Design §9.7 — an announcement targets one dormitory, several, or all of them.
+enum AnnouncementScope {
+  DORMITORY
+  GLOBAL
+}
+
+/// Discriminator for the shared status-history table.
+enum RequestType {
+  MAINTENANCE
+  ADMINISTRATIVE
+}
+
+/// Business Analysis §10.4 — the events that generate an automatic notification.
+enum NotificationType {
+  REQUEST_CREATED
+  STATUS_CHANGED
+  ADMIN_RESPONSE
+  ANNOUNCEMENT_PUBLISHED
+}
+
+// ---------------------------------------------------------------------------
+// Core entities
+// ---------------------------------------------------------------------------
+
+model Dormitory {
+  id        String   @id @default(cuid())
+  name      String
+  code      String   @unique
+  address   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users         User[]
+  locations     Location[]
+  announcements AnnouncementDormitory[]
+
+  @@map("dormitories")
+}
+
+/// Technical Design §9.1. Login identifier is `personalNumber` (Numri Personal), not email — see §11.
+model User {
+  id             String   @id @default(cuid())
+  firstName      String
+  lastName       String
+  personalNumber String   @unique
+  email          String?  @unique
+  phone          String?
+  passwordHash   String
+  role           Role     @default(STUDENT)
+  isActive       Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  /// BR-02 — a student belongs to exactly one dormitory.
+  dormitoryId String?
+  dormitory   Dormitory? @relation(fields: [dormitoryId], references: [id], onDelete: SetNull)
+
+  /// BR-02 — and to exactly one room. This is the anchor for the room-lock rule (EF-02).
+  roomId String?
+  room   Location? @relation("StudentRoom", fields: [roomId], references: [id], onDelete: SetNull)
+
+  maintenanceRequests    MaintenanceRequest[]    @relation("StudentMaintenance")
+  assignedMaintenance    MaintenanceRequest[]    @relation("AdminMaintenance")
+  administrativeRequests AdministrativeRequest[] @relation("StudentAdministrative")
+  assignedAdministrative AdministrativeRequest[] @relation("AdminAdministrative")
+  announcements          Announcement[]
+  notifications          Notification[]
+  statusChanges          RequestStatusHistory[]
+  passwordResetRequests  PasswordResetRequest[]
+  generatedQrCodes       QRCode[]                @relation("QrCreatedBy")
+  uploadedAttachments    AdministrativeRequestAttachment[]
+
+  @@index([dormitoryId])
+  @@index([role])
+  @@map("users")
+}
+
+/// Technical Design §9.3 — every reportable place. Rooms and shared spaces live in the same table
+/// so a QR code can point at either one (see QRCode below).
+model Location {
+  id        String       @id @default(cuid())
+  type      LocationType
+  label     String
+  floor     Int?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  /// Technical Design §7 — a location belongs to exactly one dormitory.
+  dormitoryId String
+  dormitory   Dormitory @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+
+  qrCode              QRCode?
+  residents           User[]               @relation("StudentRoom")
+  maintenanceRequests MaintenanceRequest[]
+
+  @@unique([dormitoryId, type, label])
+  @@index([dormitoryId])
+  @@index([type])
+  @@map("locations")
+}
+
+/// Technical Design §9.4. `locationId` is nullable on purpose: an admin generates a code first and
+/// assigns its location as a separate, explicit step. An unassigned code is inert — scanning it
+/// cannot start a report.
+model QRCode {
+  id        String   @id @default(cuid())
+  token     String   @unique
+  isActive  Boolean  @default(true)
+  /// Stored PNG of the code. The print sheet references this URL instead of embedding a data URL
+  /// per sticker, which keeps a 56-location sheet from becoming a multi-megabyte HTML document.
+  imageUrl  String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  locationId String?   @unique
+  location   Location? @relation(fields: [locationId], references: [id], onDelete: SetNull)
+
+  createdById String?
+  createdBy   User?   @relation("QrCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([isActive])
+  @@map("qr_codes")
+}
+
+// ---------------------------------------------------------------------------
+// Categories
+// ---------------------------------------------------------------------------
+
+model MaintenanceCategory {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  name        String
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  requests MaintenanceRequest[]
+
+  @@map("maintenance_categories")
+}
+
+model AdministrativeCategory {
+  id          String   @id @default(cuid())
+  slug        String   @unique
+  name        String
+  description String?
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+
+  requests AdministrativeRequest[]
+
+  @@map("administrative_categories")
+}
+
+// ---------------------------------------------------------------------------
+// Requests
+// ---------------------------------------------------------------------------
+
+/// Technical Design §9.5 — the primary use case of the platform.
+model MaintenanceRequest {
+  id          String        @id @default(cuid())
+  /// Human-readable id shown in the request tables (rendered as "MR-00001").
+  number      Int           @unique @default(autoincrement())
+  title       String
+  description String
+  status      RequestStatus @default(PENDING)
+  priority    Priority      @default(MEDIUM)
+  /// True when the location came from scanning a sticker rather than manual selection.
+  reportedViaQr Boolean     @default(false)
+
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  resolvedAt DateTime?
+
+  studentId String
+  student   User   @relation("StudentMaintenance", fields: [studentId], references: [id], onDelete: Cascade)
+
+  locationId String
+  location   Location @relation(fields: [locationId], references: [id], onDelete: Restrict)
+
+  /// Denormalised from the location so BR-08 dormitory scoping is a single indexed filter.
+  dormitoryId String
+
+  categoryId String
+  category   MaintenanceCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  /// BR-05 — auto-assigned to the administrator of the dormitory the location sits in.
+  assignedAdminId String?
+  assignedAdmin   User?   @relation("AdminMaintenance", fields: [assignedAdminId], references: [id], onDelete: SetNull)
+
+  photos MaintenanceRequestPhoto[]
+
+  @@index([dormitoryId, status])
+  @@index([studentId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("maintenance_requests")
+}
+
+model MaintenanceRequestPhoto {
+  id        String   @id @default(cuid())
+  /// Absolute Blob URL in production, or a `/uploads/...` path when running locally without Blob.
+  path      String
+  createdAt DateTime @default(now())
+
+  requestId String
+  request   MaintenanceRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  @@index([requestId])
+  @@map("maintenance_request_photos")
+}
+
+/// Technical Design §9.6 — no location and no QR code; the student picks a category only.
+model AdministrativeRequest {
+  id          String        @id @default(cuid())
+  number      Int           @unique @default(autoincrement())
+  subject     String
+  description String
+  status      RequestStatus @default(PENDING)
+  /// The written answer from the administration (§10.3). A refusal is expressed here, because
+  /// BR-06 allows no "rejected" status.
+  adminResponse String?
+
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+  resolvedAt DateTime?
+
+  studentId String
+  student   User   @relation("StudentAdministrative", fields: [studentId], references: [id], onDelete: Cascade)
+
+  dormitoryId String
+
+  categoryId String
+  category   AdministrativeCategory @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+
+  assignedAdminId String?
+  assignedAdmin   User?   @relation("AdminAdministrative", fields: [assignedAdminId], references: [id], onDelete: SetNull)
+
+  attachments AdministrativeRequestAttachment[]
+
+  @@index([dormitoryId, status])
+  @@index([studentId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("administrative_requests")
+}
+
+/// Documents exchanged on an administrative request.
+///
+/// Several categories exist purely to deliver a document — "Certifikatë banimi" is a request for a
+/// piece of paper. Without an attachment the administration can only write "come and collect it",
+/// which reinstates the office visit the platform exists to remove (Business Analysis §3).
+/// Students attach supporting evidence; administrators attach the issued document.
+model AdministrativeRequestAttachment {
+  id          String   @id @default(cuid())
+  url         String
+  filename    String
+  contentType String
+  size        Int
+  createdAt   DateTime @default(now())
+
+  requestId String
+  request   AdministrativeRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  uploadedById String
+  uploadedBy   User   @relation(fields: [uploadedById], references: [id], onDelete: Cascade)
+
+  @@index([requestId])
+  @@map("administrative_request_attachments")
+}
+
+/// Implementation & Testing §3.3/§3.4 require a request history. It also supplies the
+/// resolution-time evidence the thesis needs to evaluate H1.
+model RequestStatusHistory {
+  id          String         @id @default(cuid())
+  requestType RequestType
+  requestId   String
+  fromStatus  RequestStatus?
+  toStatus    RequestStatus
+  note        String?
+  changedAt   DateTime       @default(now())
+
+  changedById String
+  changedBy   User   @relation(fields: [changedById], references: [id], onDelete: Cascade)
+
+  @@index([requestType, requestId])
+  @@index([changedAt])
+  @@map("request_status_history")
+}
+
+// ---------------------------------------------------------------------------
+// Communication
+// ---------------------------------------------------------------------------
+
+/// Technical Design §9.7 — BR-10: only an administrator may publish.
+model Announcement {
+  id          String            @id @default(cuid())
+  title       String
+  body        String
+  scope       AnnouncementScope @default(DORMITORY)
+  isPublished Boolean           @default(true)
+  publishedAt DateTime?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+
+  authorId String
+  author   User   @relation(fields: [authorId], references: [id], onDelete: Cascade)
+
+  dormitories AnnouncementDormitory[]
+
+  @@index([scope])
+  @@index([createdAt])
+  @@map("announcements")
+}
+
+/// Join table so one announcement can target several dormitories (§9.7).
+model AnnouncementDormitory {
+  announcementId String
+  dormitoryId    String
+
+  announcement Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  dormitory    Dormitory    @relation(fields: [dormitoryId], references: [id], onDelete: Cascade)
+
+  @@id([announcementId, dormitoryId])
+  @@index([dormitoryId])
+  @@map("announcement_dormitories")
+}
+
+/// Technical Design §9.8 — automatic notifications. BR-09: every status change produces one.
+model Notification {
+  id        String           @id @default(cuid())
+  type      NotificationType
+  title     String
+  message   String
+  link      String?
+  isRead    Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+  @@index([createdAt])
+  @@map("notifications")
+}
+
+/// Backs the "Keni harruar fjalekalimin?" screen from UI Architecture §10.1 without needing a mail
+/// server: the student raises a reset request, and an administrator clears it from User Management.
+model PasswordResetRequest {
+  id        String    @id @default(cuid())
+  isHandled Boolean   @default(false)
+  createdAt DateTime  @default(now())
+  handledAt DateTime?
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([isHandled])
+  @@map("password_reset_requests")
+}

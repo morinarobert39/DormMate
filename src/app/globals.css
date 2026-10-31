@@ -1,0 +1,146 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   DormMate design tokens
+
+   Direction: calm institutional. A dark "control panel" sidebar against light
+   working surfaces, deep desaturated navy for action, and a mono voice reserved
+   for data that exists in the physical world — room numbers, request codes, QR
+   tokens.
+
+   Light theme only: UI Architecture §15 lists Dark Mode as future work.
+--------------------------------------------------------------------------- */
+
+@theme {
+  --font-sans: var(--font-plex-sans), ui-sans-serif, system-ui, sans-serif;
+  --font-mono: var(--font-plex-mono), ui-monospace, monospace;
+
+  /* Ink — sidebar, headings, primary text */
+  --color-ink-950: #070d18;
+  --color-ink-900: #101a2b;
+  --color-ink-800: #1a2739;
+  --color-ink-700: #27374e;
+  --color-ink-600: #3b4d69;
+  --color-ink-500: #5a6b85;
+  --color-ink-400: #8493a9;
+  --color-ink-300: #b3bdcc;
+  --color-ink-200: #dde3ed;
+  --color-ink-100: #eef1f6;
+  --color-ink-50: #f4f6fa;
+
+  /* Brand — deliberately deeper and greyer than a default blue-600 */
+  --color-brand-900: #12316f;
+  --color-brand-800: #163f8f;
+  --color-brand-700: #1a47a0;
+  --color-brand-600: #1b4db1;
+  --color-brand-500: #2e6bd6;
+  --color-brand-100: #dbe7fb;
+  --color-brand-50: #eef3fd;
+
+  /* Status semantics — BR-06's three statuses, plus urgent priority */
+  --color-pending-fg: #92400e;
+  --color-pending-bg: #fef3c7;
+  --color-pending-edge: #d97706;
+
+  --color-progress-fg: #1a47a0;
+  --color-progress-bg: #dbe7fb;
+  --color-progress-edge: #2e6bd6;
+
+  --color-resolved-fg: #166534;
+  --color-resolved-bg: #dcfce7;
+  --color-resolved-edge: #16a34a;
+
+  --color-urgent-fg: #991b1b;
+  --color-urgent-bg: #fee2e2;
+  --color-urgent-edge: #dc2626;
+
+  /* Crisper than the usual friendly-SaaS rounding */
+  --radius-plate: 3px;
+  --radius-chip: 4px;
+  --radius-card: 6px;
+}
+
+@layer base {
+  * {
+    border-color: var(--color-ink-200);
+  }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background-color: var(--color-ink-50);
+    color: var(--color-ink-900);
+    font-family: var(--font-sans);
+    font-feature-settings: "cv05" 1;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    letter-spacing: -0.015em;
+    font-weight: 600;
+  }
+
+  /* Visible keyboard focus everywhere — Accessibility, UI Architecture §13 */
+  :focus-visible {
+    outline: 2px solid var(--color-brand-600);
+    outline-offset: 2px;
+    border-radius: 2px;
+  }
+
+  ::placeholder {
+    color: var(--color-ink-400);
+  }
+}
+
+@layer utilities {
+  /* Numeric columns line up in tables when digits share a width */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Print — the QR sticker sheet is a real deliverable: administrators print it,
+   cut it, and stick it on doors, corridors, toilets and showers.
+--------------------------------------------------------------------------- */
+@media print {
+  @page {
+    size: A4;
+    margin: 10mm;
+  }
+
+  body {
+    background: #fff;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .print-sheet {
+    display: grid !important;
+    grid-template-columns: repeat(3, 1fr) !important;
+    gap: 6mm !important;
+  }
+
+  .print-sticker {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    border: 1px dashed #94a3b8 !important;
+  }
+}
